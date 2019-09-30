@@ -17,6 +17,6 @@ for filepath in $p_in*.pdf; do
   filename=${filepath##*/}  # Get filename without base path
   filename=${filename%.*}  # Get filename without extension
   output_filename=$p_out$filename
-  pdfimages $filepath $output_filename -$t_out
-  convert $output_filename* -rotate -90 $output_filename*
+  pdfimages $filepath $output_filename -$t_out # Convert PDF to requested type
+  convert $output_filename*.$t_out -rotate -90 $output_filename-%03d.$t_out # rotate all images by 90 degrees anti-clockwise
 done

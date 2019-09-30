@@ -76,7 +76,12 @@ def to_xml(article_id, filename, body):
     return article_node
 
 
-def tesseract_extract(filename):
+def pdf_to_pil(filename, dpi=300):
+    images = convert_from_path(filename, dpi=dpi)
+    return images
+
+
+def tesseract_extract(images):
     """Extracts text stores in filename.
     Returns a list of text representing the text scraped from each page in the pdf.
     """
@@ -84,14 +89,15 @@ def tesseract_extract(filename):
 
     print("Converting pdf to images ...", end=' ')
     s = time.time()
-    images = convert_from_path(filename)
+    images = pdf_to_pil(filename)
     e = time.time()
     print("took %.2fs." % (e - s))
     texts = []
     for page, image in enumerate(images):
         print("OCRing page %s ..." % page, end=' ')
         s = time.time()
-        texts.append(pytesseract.image_to_string(image, lang='fra'))
+        text = pytesseract.image_to_string(image, lang='fra')
+        texts.append(text)
         e = time.time()
         print("took %.2fs." % (e - s))
 
