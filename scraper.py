@@ -6,12 +6,18 @@ import re
 import textract
 from lxml import etree as ET
 import unicodedata
-from pdf2image import convert_from_path
+import pdf2image
 import pytesseract
 import time
+from PIL import Image
+
 
 PARSER = argparse.ArgumentParser(description='Make article dataset.')
 PARSER.add_argument('--path', required=True)
+PARSER.add_argument('--mode', required=True)
+SUPPORTED_FORMATS = set('jpg', 'jpeg', 'png', 'tiff')
+
+get_images = {'pdf': get_images_from_pdf, 'img': get_images_from_path}
 
 def strip_ext(filename):
     """ Strips extension from filename.
@@ -36,12 +42,10 @@ def clean_text(text):
     translation_dict = {
         '’':"'",
         '‘':"'",
-        "œ":'oe',
-        "_":"'",
+        # "œ":'oe',
     }
     # remove control characters not supported by XML.
     text = strip_chars(text)
-
     text = unicodedata.normalize('NFC', text.strip())
     text = re.sub(r'(\n\n )+', ' ', text)
     text = re.sub(r'([a-zA-Zàâçéèêëîïôûùüÿñæœ,;-])(\n)+([^\s])', r'\1 \3', text)
@@ -52,7 +56,7 @@ def to_xml(article_id, filename, body):
     """Create xml of doc from its components.
 
     Args:
-        id: (int)
+        article_id: (int)
         filename: (str) name of file.
         body: (str) content of the file.
 
@@ -77,7 +81,12 @@ def to_xml(article_id, filename, body):
 
 
 def pdf_to_pil(filename, dpi=300):
-    images = convert_from_path(filename, dpi=dpi)
+    '''Converts PDF filename to PIL images.'''
+    print("Converting pdf to images ...", end=' ')
+    s = time.time()
+    images = pdf2image.convert_from_path(filename, dpi=dpi, fmt='png')
+    e = time.time()
+    print("took %.2fs." % (e - s))
     return images
 
 
@@ -85,13 +94,6 @@ def tesseract_extract(images):
     """Extracts text stores in filename.
     Returns a list of text representing the text scraped from each page in the pdf.
     """
-    # Convert pdf to images
-
-    print("Converting pdf to images ...", end=' ')
-    s = time.time()
-    images = pdf_to_pil(filename)
-    e = time.time()
-    print("took %.2fs." % (e - s))
     texts = []
     for page, image in enumerate(images):
         print("OCRing page %s ..." % page, end=' ')
@@ -104,20 +106,45 @@ def tesseract_extract(images):
     return texts
 
 
+def is_supported(filename):
+    """Checks if the file with filename is supported."""
+    _, file_ext = os.path.splitext(filename)
+    return file_ext in SUPPORTED_FORMATS
+
+
+def get_images_from_path(root_folder):
+    for root, dirs, files in os.walk(root_folder):
+        # Ignore hidden files and folders, and files with non-supported extensions
+        images_filenames = sorted([f for f in files if not f[0] == '.' and is_supported(f)])
+        dirs[:] = [d for d in dirs if not d[0] == '.']
+        # Get all images in current root folder.
+        images = [Image.open('%s/%s' % (root, filename)) for filename in images_filenames]
+        folder_name = root.split('/')[-1]
+        yield (folder_name, images)
+
+
+def get_images_from_pdf(root_folder):
+    for root, dirs, files in os.walk(root_folder):
+        # Ignore hidden files and folders, and files with non-supported extensions
+        pdf_filenames = sorted([f for f in files if not f[0] == '.' and is_supported(f)])
+        dirs[:] = [d for d in dirs if not d[0] == '.']
+        # Get all PDFs in current folder.
+        images = [image for filename in pdf_filenames for image in pdf2image.convert_from_path(filename)]
+        folder_name = root.split('/')[-1]
+        yield (folder_name, images)
+
+
 if __name__ == '__main__':
     args = PARSER.parse_args()
-    path = os.path.expanduser(args.path)
-    print('Got %s' % path)
-
-    filenames = glob.glob(path + "*pdf")
-    print('Found %s filenames' % filenames)
+    
     articles_tag = ET.Element('articles')
     results = []
-    for article_id, filename in enumerate(filenames):
+
+    for article_id, filename in enumerate(get_images[args.mode](filename)):
         print("Document %s --------------------------" % article_id)
         print("Running OCR ...", end=' ')
         s = time.time()
-        texts = tesseract_extract(filename)  # extract text from pdf
+        texts = tesseract_extract(images)  # extract text from pdf
         e = time.time()
         print("took %.2fs." % (e - s))
         body = ' '.join(texts)  # join text from pages
