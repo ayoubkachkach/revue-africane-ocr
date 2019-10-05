@@ -12,12 +12,10 @@ import time
 from PIL import Image
 
 
-PARSER = argparse.ArgumentParser(description='Make article dataset.')
+PARSER = argparse.ArgumentParser(description='Make document dataset.')
 PARSER.add_argument('--path', required=True)
 PARSER.add_argument('--mode', required=True)
-SUPPORTED_FORMATS = set('jpg', 'jpeg', 'png', 'tiff')
-
-get_images = {'pdf': get_images_from_pdf, 'img': get_images_from_path}
+SUPPORTED_FORMATS = set(['jpg', 'jpeg', 'png', 'tiff'])
 
 def strip_ext(filename):
     """ Strips extension from filename.
@@ -52,32 +50,32 @@ def clean_text(text):
     return text.translate(str.maketrans(translation_dict))
 
 
-def to_xml(article_id, filename, body):
+def to_xml(document_id, title, body):
     """Create xml of doc from its components.
 
     Args:
-        article_id: (int)
-        filename: (str) name of file.
+        document_id: (int)
+        title: (str) name of file.
         body: (str) content of the file.
 
     Returns:
-        ET.Element object representing the XML node of the article.
+        ET.Element object representing the XML node of the document.
     """
     if not body:
-        print("No content for %s" % filename)
+        print("No content for %s" % title)
 
-    article_node = ET.Element('article')
+    document_node = ET.Element('document')
 
-    id_node = ET.SubElement(article_node, 'id')
-    id_node.text = str(article_id)
+    id_node = ET.SubElement(document_node, 'id')
+    id_node.text = str(document_id)
 
-    filename_node = ET.SubElement(article_node, 'filename')
-    filename_node.text = clean_text(filename)
+    title_node = ET.SubElement(document_node, 'title')
+    title_node.text = clean_text(title)
 
-    body_node = ET.SubElement(article_node, 'body')
+    body_node = ET.SubElement(document_node, 'body')
     body_node.text = clean_text(body)
 
-    return article_node
+    return document_node
 
 
 def pdf_to_pil(filename, dpi=300):
@@ -106,16 +104,16 @@ def tesseract_extract(images):
     return texts
 
 
-def is_supported(filename):
+def get_ext(filename):
     """Checks if the file with filename is supported."""
     _, file_ext = os.path.splitext(filename)
-    return file_ext in SUPPORTED_FORMATS
+    return file_ext[1:]
 
 
 def get_images_from_path(root_folder):
     for root, dirs, files in os.walk(root_folder):
         # Ignore hidden files and folders, and files with non-supported extensions
-        images_filenames = sorted([f for f in files if not f[0] == '.' and is_supported(f)])
+        images_filenames = sorted([f for f in files if not f[0] == '.' and get_ext(f) in SUPPORTED_FORMATS])
         dirs[:] = [d for d in dirs if not d[0] == '.']
         # Get all images in current root folder.
         images = [Image.open('%s/%s' % (root, filename)) for filename in images_filenames]
@@ -126,33 +124,37 @@ def get_images_from_path(root_folder):
 def get_images_from_pdf(root_folder):
     for root, dirs, files in os.walk(root_folder):
         # Ignore hidden files and folders, and files with non-supported extensions
-        pdf_filenames = sorted([f for f in files if not f[0] == '.' and is_supported(f)])
+        pdf_filenames = sorted([f for f in files if not f[0] == '.' and get_ext(f) == 'pdf'])
+
         dirs[:] = [d for d in dirs if not d[0] == '.']
         # Get all PDFs in current folder.
-        images = [image for filename in pdf_filenames for image in pdf2image.convert_from_path(filename)]
+        images = [image for filename in pdf_filenames for image in pdf2image.convert_from_path('%s/%s' % (root, filename))]
         folder_name = root.split('/')[-1]
         yield (folder_name, images)
 
 
+def images_to_text(document_name, images, lang='fra'):
+    return [pytesseract.image_to_string(image, lang=lang) for image in images]
+
+get_images = {'pdf': get_images_from_pdf, 'img': get_images_from_path}
+
 if __name__ == '__main__':
     args = PARSER.parse_args()
     
-    articles_tag = ET.Element('articles')
+    documents_tag = ET.Element('documents')
     results = []
 
-    for article_id, filename in enumerate(get_images[args.mode](filename)):
-        print("Document %s --------------------------" % article_id)
+    for document_id, (folder_name, images) in enumerate(get_images[args.mode](args.path)):
+        print("Document %s --------------------------" % document_id)
         print("Running OCR ...", end=' ')
         s = time.time()
-        texts = tesseract_extract(images)  # extract text from pdf
+        texts = images_to_text(folder_name, images)  # extract text from pdf
         e = time.time()
         print("took %.2fs." % (e - s))
         body = ' '.join(texts)  # join text from pages
         print('Stripping text...')
-        title = strip_ext(filename)  # keep only filename as title
-        articles_tag.append(to_xml(article_id, title, body))
+        documents_tag.append(to_xml(document_id, title=folder_name, body=body))
 
-
-    tree = ET.ElementTree(articles_tag)
-    with open('textract_output.xml', 'wb') as f:
+    tree = ET.ElementTree(documents_tag)
+    with open('output.xml', 'wb') as f:
         tree.write(f, encoding='utf-8', pretty_print=True)
