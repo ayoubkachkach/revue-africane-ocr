@@ -10,6 +10,7 @@ import pdf2image
 import pytesseract
 import time
 from PIL import Image
+from utils import clean_text
 
 
 PARSER = argparse.ArgumentParser(description='Make document dataset.')
@@ -17,65 +18,23 @@ PARSER.add_argument('--path', required=True)
 PARSER.add_argument('--mode', required=True)
 SUPPORTED_FORMATS = set(['jpg', 'jpeg', 'png', 'tiff'])
 
-def strip_ext(filename):
-    """ Strips extension from filename.
-    e.g.
-    >> strip_ext('example.pdf')
-    >> 'example'
-    """
-    return re.sub(r'((.*/)*)?(.+)\..+', r'\3', filename)
-
-
-def strip_chars(text, extra=u''):
-    """Strip text from control characters not supported by XML."""
-    remove_re = re.compile(u'[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F%s]'
-                           % extra)
-    return remove_re.sub('', text)
-
-
-def clean_text(text):
-    """Normalize quotes, apostrophes and diacritics (by using combined
-    characters) used in text
-    """
-    translation_dict = {
-        '’':"'",
-        '‘':"'",
-        # "œ":'oe',
-    }
-    # remove control characters not supported by XML.
-    text = strip_chars(text)
-    text = unicodedata.normalize('NFC', text.strip())
-    text = re.sub(r'(\n\n )+', ' ', text)
-    text = re.sub(r'([a-zA-Zàâçéèêëîïôûùüÿñæœ,;-])(\n)+([^\s])', r'\1 \3', text)
-    return text.translate(str.maketrans(translation_dict))
-
-
-def to_xml(document_id, title, body):
+def to_xml(root, attribute_to_value):
     """Create xml of doc from its components.
 
     Args:
-        document_id: (int)
-        title: (str) name of file.
-        body: (str) content of the file.
-
+        root: (str) name of root tag in xml tree
+        attribute_to_value: list of tuples of the form (tag, value).
     Returns:
         ET.Element object representing the XML node of the document.
+    Usage:
+        to_xml('doc', [('title', 'This is a title.'), ('body', 'This is a body.')])
     """
-    if not body:
-        print("No content for %s" % title)
+    root_node = ET.Element(root)
+    for attribute, value in attribute_to_value:
+        node = ET.SubElement(root_node, attribute)
+        node.text = value
 
-    document_node = ET.Element('document')
-
-    id_node = ET.SubElement(document_node, 'id')
-    id_node.text = str(document_id)
-
-    title_node = ET.SubElement(document_node, 'title')
-    title_node.text = clean_text(title)
-
-    body_node = ET.SubElement(document_node, 'body')
-    body_node.text = clean_text(body)
-
-    return document_node
+    return root_node
 
 
 def pdf_to_pil(filename, dpi=300):
@@ -138,12 +97,8 @@ def images_to_text(document_name, images, lang='fra'):
 
 get_images = {'pdf': get_images_from_pdf, 'img': get_images_from_path}
 
-if __name__ == '__main__':
-    args = PARSER.parse_args()
-    
-    documents_tag = ET.Element('documents')
-    results = []
-
+def scrape(path, mode):
+    document_tags = []
     for document_id, (folder_name, images) in enumerate(get_images[args.mode](args.path)):
         print("Document %s --------------------------" % document_id)
         print("Running OCR ...", end=' ')
@@ -153,8 +108,18 @@ if __name__ == '__main__':
         print("took %.2fs." % (e - s))
         body = ' '.join(texts)  # join text from pages
         print('Stripping text...')
-        documents_tag.append(to_xml(document_id, title=folder_name, body=body))
+        attribute_to_value = (('id', str(document_id)), ('title', clean_text(folder_name)), ('body', clean_text(body)))
+        documents_tag.append(to_xml(root='document', attribute_to_value=attribute_to_value))
+        break
+    return documents_tag
+    # tree = ET.ElementTree(documents_tag)
+    # with open('output.xml', 'wb') as f:
+    #     tree.write(f, encoding='utf-8', pretty_print=True)
 
+if __name__ == '__main__':
+    args = PARSER.parse_args()
+    documents_tag = scrape(args.path, args.mode)
     tree = ET.ElementTree(documents_tag)
     with open('output.xml', 'wb') as f:
         tree.write(f, encoding='utf-8', pretty_print=True)
+    
