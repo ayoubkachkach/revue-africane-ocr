@@ -1,14 +1,6 @@
 import re
 import unicodedata
 
-def strip_ext(filename):
-    """ Strips extension from filename.
-    e.g.
-    >> strip_ext('example.pdf')
-    >> 'example'
-    """
-    return re.sub(r'((.*/)*)?(.+)\..+', r'\3', filename)
-
 
 def strip_chars(text, extra=u''):
     """Strip text from control characters not supported by XML."""
