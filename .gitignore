@@ -2,3 +2,12 @@ tiff
 *pdf
 output.xml
 test
+*xlsx
+*csv
+docs/
+__pycache__/
+xmls/
+Volume*
+*log
+gecko*
+phantomjs*
