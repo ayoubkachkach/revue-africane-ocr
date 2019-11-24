@@ -6,8 +6,10 @@ test
 *csv
 docs/
 __pycache__/
-xmls/
+*xml
+!revue_africaine.xml
 Volume*
 *log
 gecko*
 phantomjs*
+backup/
