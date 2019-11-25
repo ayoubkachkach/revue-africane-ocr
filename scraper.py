@@ -3,17 +3,17 @@ import argparse
 import glob
 import os
 import re
-import textract
 from lxml import etree as ET
 import unicodedata
 import pdf2image
 import pytesseract
 import time
 from PIL import Image
-from utils import clean_text
+from utils import clean_text, PdfParser
 import logging
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from collections import namedtuple
 
 
 PARSER = argparse.ArgumentParser(description='Make document dataset.')
@@ -25,6 +25,8 @@ logging.basicConfig(level=logging.DEBUG, filename='scraper.log', format='%(ascti
 
 # Set max threads to be used by tesseract on one page to 1
 os.environ['OMP_THREAD_LIMIT'] = '1'
+
+XMLTag = namedtuple('XMLTag', ('tag_name', 'text'))
 
 def to_xml(root, tag_to_value):
     """Create xml of doc from its components.
@@ -48,7 +50,7 @@ def read_pdfs(path):
     for path2pdf in path.glob('*pdf'):
         with open(path2pdf, 'rb') as pdf:
             filename, _ = os.path.splitext(path2pdf.name)
-            yield filename, pdf.read()
+            yield filename, pdf, pdf.read()
 
 
 def pdf_to_pil(pdf, dpi=300):
@@ -62,7 +64,7 @@ def pdf_to_pil(pdf, dpi=300):
     """
     logging.log(logging.INFO, "Converting pdf to images ...")
     s = time.time()
-    images = pdf2image.convert_from_bytes(pdf, dpi=dpi, fmt='png', thread_count=4)
+    images = pdf2image.convert_from_bytes(pdf, dpi=dpi, fmt='jpg', thread_count=4)
     e = time.time()
     logging.log(logging.INFO, "took %.2fs." % (e - s))
     return images
@@ -84,11 +86,25 @@ def extract_volume_info(tag_to_value):
         
         m = re.match('Volume_(.*)_(.*)', value)
         if not m:
-            return None
+            return tag_to_value
         vol = m.group(1)
         year = m.group(2)
 
-    return tag_to_value + (('vol', vol), ('year', year),)
+    return tag_to_value + (XMLTag('vol', vol), XMLTag('year', year),)
+
+def get_table_of_contents(pdf):
+    """ Returns table of contents as string."""
+    parsed_pdf = PdfParser(pdf)
+    output_format = '%-5s  %s'
+    toc_items = []
+    if not parsed_pdf.getDestinationPageNumbers():
+        return 'N/A'
+
+    page_to_title = sorted([(v,str(k)) for k,v in parsed_pdf.getDestinationPageNumbers().items()])
+    for page, title in page_to_title:
+        toc_items.append(output_format % (page + 1, title))
+    
+    return '\n'.join(toc_items)
 
 
 def scrape(path, text_processors, xml_constructors, lang='fra', threads=10):
@@ -107,10 +123,15 @@ def scrape(path, text_processors, xml_constructors, lang='fra', threads=10):
     """
     try:
         logging.log(logging.INFO, 'Reading PDFs ...')
-        for document_id, (filename, pdf) in enumerate(read_pdfs(path)):
-            logging.log(logging.INFO, f'Reading PDFs ...')
+        for document_id, (filename, pdf, pdf_bytes) in enumerate(read_pdfs(path)):
+            if os.path.isfile(Path(f'{filename}.xml')):
+                logging.log(logging.INFO, f'Skipping {filename} as it already exists.')
+                continue
+
+            logging.log(logging.INFO, f'Reading PDF {filename}')
+            table_of_contents = get_table_of_contents(pdf)
             # Convert pdf to images
-            images = pdf_to_pil(pdf)
+            images = pdf_to_pil(pdf_bytes)
 
             logging.log(logging.INFO, "Running OCR on document %s " % document_id)
             s = time.time()
@@ -127,7 +148,12 @@ def scrape(path, text_processors, xml_constructors, lang='fra', threads=10):
 
             # Construct XML from scraped documents.
             filename = clean_text(filename)
-            tag_to_value = (('id', str(document_id)), ('title', filename), ('body', clean_text(body)))
+            tag_to_value = (
+                XMLTag(tag_name='id', text=str(document_id)), 
+                XMLTag(tag_name='title', text=filename),
+                XMLTag(tag_name='body', text=clean_text(body)),
+                XMLTag(tag_name='toc', text=clean_text(table_of_contents))
+            )
             for xml_constructor in xml_constructors:
                 tag_to_value = xml_constructor(tag_to_value)
 
@@ -140,6 +166,8 @@ def scrape(path, text_processors, xml_constructors, lang='fra', threads=10):
 
     except KeyboardInterrupt:
         logging.log(logging.INFO, 'Program stopped by user ... returning XMLs created so far to file')
+    except Exception as e:
+        print(e)
     finally:
         return []
 
@@ -148,6 +176,7 @@ if __name__ == '__main__':
     args = PARSER.parse_args()
 
     input_path = Path(args.path)
+
     document_tags = scrape(
         input_path,
         text_processors=[add_pages, join_hyphenated_words],
